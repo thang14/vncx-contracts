@@ -195,6 +195,181 @@ describe("VNCXMasterAnchor", async function () {
     });
   });
 
+  describe("verifyOrg", function () {
+    it("Should verify an organization with metadata", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+
+      const metadataHash = keccak256(stringToHex("org-name:Example Corp,domain:example.com"));
+      const verificationNote = "Verified business registration and domain ownership";
+
+      const deploymentBlockNumber = await publicClient.getBlockNumber();
+
+      await contract.write.verifyOrg([orgId, true, metadataHash, verificationNote], { account: owner.account });
+
+      // Check verification status
+      assert.equal(await contract.read.isOrgVerified([orgId]), true);
+
+      // Get detailed verification info
+      const info = await contract.read.getOrgVerificationInfo([orgId]);
+      assert.equal(info.isVerified, true);
+      assert.equal(getAddress(info.verifier), getAddress(owner.account.address));
+      assert.equal(info.metadataHash, metadataHash);
+      assert.equal(info.verificationNote, verificationNote);
+      assert(info.verifiedAt > 0n);
+
+      // Check event was emitted
+      const events = await publicClient.getContractEvents({
+        address: contract.address as `0x${string}`,
+        abi: contract.abi,
+        eventName: "OrgVerified",
+        fromBlock: deploymentBlockNumber,
+      });
+
+      assert.equal(events.length, 1);
+      assert.equal(events[0].args.orgId, orgId);
+      assert.equal(events[0].args.status, true);
+      assert.equal(getAddress(events[0].args.verifier as `0x${string}`), getAddress(owner.account.address));
+      assert.equal(events[0].args.metadataHash, metadataHash);
+      assert.equal(events[0].args.verificationNote, verificationNote);
+    });
+
+    it("Should verify org by operator", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+      await contract.write.registerOperator([operator.account.address, true], { account: owner.account });
+
+      const metadataHash = keccak256(stringToHex("verified-org"));
+      const verificationNote = "Verified by operator";
+
+      await contract.write.verifyOrg([orgId, true, metadataHash, verificationNote], { account: operator.account });
+
+      const info = await contract.read.getOrgVerificationInfo([orgId]);
+      assert.equal(info.isVerified, true);
+      assert.equal(getAddress(info.verifier), getAddress(operator.account.address));
+    });
+
+    it("Should unverify an organization", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+
+      const metadataHash = keccak256(stringToHex("verified"));
+      await contract.write.verifyOrg([orgId, true, metadataHash, "Verified"], { account: owner.account });
+      assert.equal(await contract.read.isOrgVerified([orgId]), true);
+
+      await contract.write.verifyOrg([orgId, false, metadataHash, "Unverified"], { account: owner.account });
+      assert.equal(await contract.read.isOrgVerified([orgId]), false);
+
+      const info = await contract.read.getOrgVerificationInfo([orgId]);
+      assert.equal(info.isVerified, false);
+    });
+
+    it("Should revert if called by non-owner and non-operator", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+
+      const metadataHash = keccak256(stringToHex("test"));
+      
+      try {
+        await contract.write.verifyOrg([orgId, true, metadataHash, ""], { account: unauthorized.account });
+        assert.fail("Expected transaction to revert");
+      } catch (error: any) {
+        assert(error.message.includes("Only Owner or Operator can verify"), `Expected "Only Owner or Operator can verify" but got: ${error.message}`);
+      }
+    });
+
+    it("Should revert if org is not registered", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("non-existent-org");
+      const metadataHash = keccak256(stringToHex("test"));
+
+      try {
+        await contract.write.verifyOrg([orgId, true, metadataHash, ""], { account: owner.account });
+        assert.fail("Expected transaction to revert");
+      } catch (error: any) {
+        assert(error.message.includes("Org not registered"), `Expected "Org not registered" but got: ${error.message}`);
+      }
+    });
+
+    it("Should return false for unverified org", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+
+      assert.equal(await contract.read.isOrgVerified([orgId]), false);
+    });
+  });
+
+  describe("getOrgVerificationInfo", function () {
+    it("Should return verification info for verified org", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+
+      const metadataHash = keccak256(stringToHex("metadata"));
+      const verificationNote = "Test verification note";
+      
+      await contract.write.verifyOrg([orgId, true, metadataHash, verificationNote], { account: owner.account });
+
+      const info = await contract.read.getOrgVerificationInfo([orgId]);
+      assert.equal(info.isVerified, true);
+      assert.equal(info.metadataHash, metadataHash);
+      assert.equal(info.verificationNote, verificationNote);
+      assert(info.verifiedAt > 0n);
+    });
+
+    it("Should return default values for unverified org", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+
+      const info = await contract.read.getOrgVerificationInfo([orgId]);
+      assert.equal(info.isVerified, false);
+      assert.equal(info.metadataHash, "0x0000000000000000000000000000000000000000000000000000000000000000");
+      assert.equal(info.verificationNote, "");
+      assert.equal(info.verifiedAt, 0n);
+    });
+  });
+
+  describe("verifyOrgMetadata", function () {
+    it("Should return true for matching metadata hash", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+
+      const metadataHash = keccak256(stringToHex("org-data"));
+      await contract.write.verifyOrg([orgId, true, metadataHash, "Verified"], { account: owner.account });
+
+      assert.equal(await contract.read.verifyOrgMetadata([orgId, metadataHash]), true);
+    });
+
+    it("Should return false for non-matching metadata hash", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+
+      const metadataHash = keccak256(stringToHex("org-data"));
+      await contract.write.verifyOrg([orgId, true, metadataHash, "Verified"], { account: owner.account });
+
+      const wrongHash = keccak256(stringToHex("wrong-data"));
+      assert.equal(await contract.read.verifyOrgMetadata([orgId, wrongHash]), false);
+    });
+
+    it("Should return false for unverified org even with matching hash", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+
+      const metadataHash = keccak256(stringToHex("org-data"));
+      // Org is not verified
+      assert.equal(await contract.read.verifyOrgMetadata([orgId, metadataHash]), false);
+    });
+  });
+
   describe("authorizeWorker", function () {
     it("Should authorize a worker", async function () {
       const contract = await viem.deployContract("VNCXMasterAnchor");
@@ -259,11 +434,12 @@ describe("VNCXMasterAnchor", async function () {
   });
 
   describe("recordOrgBatch", function () {
-    it("Should record batch when called by org owner", async function () {
+    it("Should record batch when called by org owner (unverified org)", async function () {
       const contract = await viem.deployContract("VNCXMasterAnchor");
       const orgId = stringToBytes32("org-001");
       await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
 
+      // Org is not verified, but should still be able to record
       const batchIds = stringsToBytes32Array(["batch-1", "batch-2"]);
       const dataHashes = stringsToBytes32Array(["hash1", "hash2"]);
 
@@ -287,6 +463,37 @@ describe("VNCXMasterAnchor", async function () {
       assert.equal(events[0].args.orgId, orgId);
       assert.equal(getAddress(events[0].args.submitter as `0x${string}`), getAddress(orgOwner.account.address));
 
+      assert.equal(await contract.read.verifyHash([dataHashes[0]]), true);
+      assert.equal(await contract.read.verifyHash([dataHashes[1]]), true);
+    });
+
+    it("Should record batch when called by org owner (verified org)", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+      
+      // Verify the org
+      const metadataHash = keccak256(stringToHex("verified"));
+      await contract.write.verifyOrg([orgId, true, metadataHash, "Verified"], { account: owner.account });
+
+      const batchIds = stringsToBytes32Array(["batch-1", "batch-2"]);
+      const dataHashes = stringsToBytes32Array(["hash1", "hash2"]);
+
+      const deploymentBlockNumber = await publicClient.getBlockNumber();
+
+      await contract.write.recordOrgBatch(
+        [orgId, batchIds, dataHashes],
+        { account: orgOwner.account }
+      );
+
+      const events = await publicClient.getContractEvents({
+        address: contract.address as `0x${string}`,
+        abi: contract.abi,
+        eventName: "AnchorRecorded",
+        fromBlock: deploymentBlockNumber,
+      });
+
+      assert.equal(events.length, 2);
       assert.equal(await contract.read.verifyHash([dataHashes[0]]), true);
       assert.equal(await contract.read.verifyHash([dataHashes[1]]), true);
     });
@@ -415,11 +622,12 @@ describe("VNCXMasterAnchor", async function () {
       return splitSignature(signature);
     }
 
-    it("Should record batch with valid signature from org owner", async function () {
+    it("Should record batch with valid signature from org owner (unverified org)", async function () {
       const contract = await viem.deployContract("VNCXMasterAnchor");
       const orgId = stringToBytes32("org-001");
       await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
 
+      // Org is not verified, but should still be able to record
       const batchIds = stringsToBytes32Array(["batch-1", "batch-2"]);
       const dataHashes = stringsToBytes32Array(["hash1", "hash2"]);
 
@@ -436,6 +644,44 @@ describe("VNCXMasterAnchor", async function () {
       await contract.write.recordRelayedBatch(
         [orgId, batchIds, dataHashes, batchHash, r, s, v],
         { account: unauthorized.account } // Any account can submit, signature is what matters
+      );
+
+      const events = await publicClient.getContractEvents({
+        address: contract.address as `0x${string}`,
+        abi: contract.abi,
+        eventName: "AnchorRecorded",
+        fromBlock: deploymentBlockNumber,
+      });
+
+      assert.equal(events.length, 2);
+      assert.equal(await contract.read.verifyHash([dataHashes[0]]), true);
+      assert.equal(await contract.read.verifyHash([dataHashes[1]]), true);
+    });
+
+    it("Should record batch with valid signature from org owner (verified org)", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      await contract.write.registerOrg([orgId, orgOwner.account.address], { account: owner.account });
+      
+      // Verify the org
+      const metadataHash = keccak256(stringToHex("verified"));
+      await contract.write.verifyOrg([orgId, true, metadataHash, "Verified"], { account: owner.account });
+
+      const batchIds = stringsToBytes32Array(["batch-1", "batch-2"]);
+      const dataHashes = stringsToBytes32Array(["hash1", "hash2"]);
+
+      // Compute batchHash (client-side)
+      const batchHash = computeBatchHash(orgId, batchIds, dataHashes);
+      
+      // Sign using EIP-712
+      const contractAddress = await getContractAddress(contract);
+      const { r, s, v } = await signEIP712(orgOwner, contractAddress, orgId, batchHash);
+
+      const deploymentBlockNumber = await publicClient.getBlockNumber();
+
+      await contract.write.recordRelayedBatch(
+        [orgId, batchIds, dataHashes, batchHash, r, s, v],
+        { account: unauthorized.account }
       );
 
       const events = await publicClient.getContractEvents({

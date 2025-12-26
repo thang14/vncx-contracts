@@ -21,8 +21,22 @@ contract VNCXMasterAnchor is Ownable, EIP712 {
 
     // --- Data Structures & State ---
 
+    /**
+     * @dev Struct to store detailed verification information for an organization
+     */
+    struct OrgVerificationInfo {
+        bool isVerified;              // Verification status
+        address verifier;              // Address that performed verification (owner or operator)
+        uint256 verifiedAt;            // Timestamp when verified
+        bytes32 metadataHash;          // Hash of verified metadata (org name, domain, etc.)
+        string verificationNote;       // Optional note about what was verified
+    }
+
     // mapping(orgId => enterprise owner wallet address)
     mapping(bytes32 => address) public orgOwners;
+    
+    // mapping(orgId => verification information)
+    mapping(bytes32 => OrgVerificationInfo) public orgVerificationInfo;
     
     // mapping(orgId => mapping(worker wallet address => authorization status))
     mapping(bytes32 => mapping(address => bool)) public authorizedWorkers;
@@ -36,6 +50,13 @@ contract VNCXMasterAnchor is Ownable, EIP712 {
     // --- Events ---
 
     event OrgRegistered(bytes32 indexed orgId, address indexed owner);
+    event OrgVerified(
+        bytes32 indexed orgId, 
+        bool status, 
+        address indexed verifier,
+        bytes32 metadataHash,
+        string verificationNote
+    );
     event OperatorRegistered(address indexed operator, bool status);
     event WorkerAuthorized(bytes32 indexed orgId, address indexed worker, bool status);
     event AnchorRecorded(
@@ -58,6 +79,37 @@ contract VNCXMasterAnchor is Ownable, EIP712 {
         require(_operator != address(0), "VNCX: Invalid address");
         operators[_operator] = _status;
         emit OperatorRegistered(_operator, _status);
+    }
+
+    /**
+     * @dev Verify or unverify an organization with detailed information.
+     * Only contract owner or registered operators can call this function.
+     * @param _orgId Organization ID as bytes32
+     * @param _status true to verify, false to unverify
+     * @param _metadataHash Hash of verified metadata (org name, domain, registration info, etc.)
+     * @param _verificationNote Optional note describing what was verified
+     */
+    function verifyOrg(
+        bytes32 _orgId, 
+        bool _status,
+        bytes32 _metadataHash,
+        string calldata _verificationNote
+    ) external {
+        require(
+            msg.sender == owner() || operators[msg.sender],
+            "VNCX: Only Owner or Operator can verify"
+        );
+        require(orgOwners[_orgId] != address(0), "VNCX: Org not registered");
+        
+        orgVerificationInfo[_orgId] = OrgVerificationInfo({
+            isVerified: _status,
+            verifier: msg.sender,
+            verifiedAt: block.timestamp,
+            metadataHash: _metadataHash,
+            verificationNote: _verificationNote
+        });
+        
+        emit OrgVerified(_orgId, _status, msg.sender, _metadataHash, _verificationNote);
     }
 
     // --- Enterprise Functions (Org Owner calls) ---
@@ -167,6 +219,37 @@ contract VNCXMasterAnchor is Ownable, EIP712 {
      */
     function verifyHash(bytes32 _dataHash) external view returns (bool) {
         return processedHashes[_dataHash];
+    }
+
+    /**
+     * @dev Check if an organization is verified.
+     * @param _orgId Organization ID as bytes32
+     * @return true if the org is verified, false otherwise
+     */
+    function isOrgVerified(bytes32 _orgId) external view returns (bool) {
+        return orgVerificationInfo[_orgId].isVerified;
+    }
+
+    /**
+     * @dev Get detailed verification information for an organization.
+     * This allows anyone to verify what information was checked during verification.
+     * @param _orgId Organization ID as bytes32
+     * @return verificationInfo Struct containing verification details
+     */
+    function getOrgVerificationInfo(bytes32 _orgId) external view returns (OrgVerificationInfo memory) {
+        return orgVerificationInfo[_orgId];
+    }
+
+    /**
+     * @dev Verify organization metadata hash matches the stored verification.
+     * This allows third parties to verify that the claimed metadata matches what was verified on-chain.
+     * @param _orgId Organization ID as bytes32
+     * @param _claimedMetadataHash Hash of the metadata being verified
+     * @return true if metadata hash matches the stored verification, false otherwise
+     */
+    function verifyOrgMetadata(bytes32 _orgId, bytes32 _claimedMetadataHash) external view returns (bool) {
+        OrgVerificationInfo memory info = orgVerificationInfo[_orgId];
+        return info.isVerified && info.metadataHash == _claimedMetadataHash;
     }
 
     /**
