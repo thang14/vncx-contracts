@@ -88,22 +88,67 @@ describe("VNCXMasterAnchor", async function () {
       assert.equal(events[0].args.orgId, orgId);
     });
 
-    it("Should revert if org already registered", async function () {
+    it("Should allow updating org owner if already registered", async function () {
+      const contract = await viem.deployContract("VNCXMasterAnchor");
+      const orgId = stringToBytes32("org-001");
+      const ownerAddress = orgOwner.account.address;
+      const newOwnerAddress = worker.account.address;
+
+      await contract.write.registerOrg([orgId, ownerAddress], { account: owner.account });
+
+      // Update owner
+      const deploymentBlockNumber = await publicClient.getBlockNumber();
+      await contract.write.registerOrg([orgId, newOwnerAddress], { account: owner.account });
+
+      // Check that owner was updated
+      assert.equal(
+        getAddress(await contract.read.orgOwners([orgId])),
+        getAddress(newOwnerAddress)
+      );
+
+      // Check event was emitted
+      const events = await publicClient.getContractEvents({
+        address: contract.address as `0x${string}`,
+        abi: contract.abi,
+        eventName: "OrgRegistered",
+        fromBlock: deploymentBlockNumber,
+      });
+
+      assert.equal(events.length, 1);
+      assert.equal(getAddress(events[0].args.owner as `0x${string}`), getAddress(newOwnerAddress));
+    });
+
+    it("Should allow operator to register org", async function () {
       const contract = await viem.deployContract("VNCXMasterAnchor");
       const orgId = stringToBytes32("org-001");
       const ownerAddress = orgOwner.account.address;
 
-      await contract.write.registerOrg([orgId, ownerAddress], { account: owner.account });
+      // Register operator first
+      await contract.write.registerOperator([operator.account.address, true], { account: owner.account });
 
-      try {
-        await contract.write.registerOrg([orgId, ownerAddress], { account: owner.account });
-        assert.fail("Expected transaction to revert");
-      } catch (error: any) {
-        assert(error.message.includes("Org already registered"), `Expected "Org already registered" but got: ${error.message}`);
-      }
+      const deploymentBlockNumber = await publicClient.getBlockNumber();
+
+      // Operator registers org
+      await contract.write.registerOrg([orgId, ownerAddress], { account: operator.account });
+
+      // Check that org was registered
+      assert.equal(
+        getAddress(await contract.read.orgOwners([orgId])),
+        getAddress(ownerAddress)
+      );
+
+      // Check event was emitted
+      const events = await publicClient.getContractEvents({
+        address: contract.address as `0x${string}`,
+        abi: contract.abi,
+        eventName: "OrgRegistered",
+        fromBlock: deploymentBlockNumber,
+      });
+
+      assert.equal(events.length, 1);
     });
 
-    it("Should revert if called by non-owner", async function () {
+    it("Should revert if called by non-owner and non-operator", async function () {
       const contract = await viem.deployContract("VNCXMasterAnchor");
       const orgId = stringToBytes32("org-001");
       const ownerAddress = orgOwner.account.address;
@@ -112,7 +157,7 @@ describe("VNCXMasterAnchor", async function () {
         await contract.write.registerOrg([orgId, ownerAddress], { account: unauthorized.account });
         assert.fail("Expected transaction to revert");
       } catch (error: any) {
-        assert(error.message.includes("OwnableUnauthorizedAccount"), `Expected "OwnableUnauthorizedAccount" but got: ${error.message}`);
+        assert(error.message.includes("Only Owner or Operator can register"), `Expected "Only Owner or Operator can register" but got: ${error.message}`);
       }
     });
 

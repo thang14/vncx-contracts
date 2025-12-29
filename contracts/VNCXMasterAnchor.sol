@@ -68,8 +68,11 @@ contract VNCXMasterAnchor is Ownable, EIP712 {
 
     // --- Admin Functions (Only VNCX can call) ---
 
-    function registerOrg(bytes32 _orgId, address _owner) external onlyOwner {
-        require(orgOwners[_orgId] == address(0), "VNCX: Org already registered");
+    function registerOrg(bytes32 _orgId, address _owner) external {
+        require(
+            msg.sender == owner() || operators[msg.sender],
+            "VNCX: Only Owner or Operator can register"
+        );
         require(_owner != address(0), "VNCX: Invalid address");
         orgOwners[_orgId] = _owner;
         emit OrgRegistered(_orgId, _owner);
